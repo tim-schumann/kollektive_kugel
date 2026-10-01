@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Kollektive Kugel: Erspiele dein Paneel!</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M5 1 9.5 9h-9z' fill='%236132d2'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700&display=swap" rel="stylesheet">
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+  </script>
+  <style>
+    :root {
+      /* signal colours, sampled from the reference image */
+      --blue: #2c17e6;       /* your panel */
+      --violet: #6132d2;     /* buttons */
+      --magenta: #9540b8;    /* panels already taken, errors */
+      /* light, desaturated fills */
+      --paper: #eeedf5;
+      --field: #f9f8fd;
+      --line: #cfcbe6;
+      --ink: #1f1b3a;        /* deep indigo text */
+      --muted: #625d7e;
+      color-scheme: light;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: grid;
+      grid-template-rows: auto minmax(18rem, 1fr) auto;
+      min-height: 100%;
+      padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+      background: var(--paper);
+      color: var(--ink);
+      font-family: 'Titillium Web', 'Segoe UI', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      font-size: 1rem;
+      line-height: 1.45;
+    }
+
+    header {
+      padding: 1.75rem 1.25rem 0;
+      text-align: center;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      line-height: 1.2;
+      text-wrap: balance;
+      font-weight: 700;
+      letter-spacing: 0.005em;
+    }
+    header p {
+      margin: 0.4rem auto 0;
+      color: var(--muted);
+      max-width: 34rem;
+      text-wrap: balance;
+    }
+
+    #stage {
+      position: relative;
+      min-height: 0;
+    }
+    #stage canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: grab;
+      touch-action: none;
+    }
+    #stage canvas:active { cursor: grabbing; }
+
+    .draw {
+      display: grid;
+      justify-items: center;
+      gap: 0.75rem;
+      padding: 0.5rem 1.25rem 2rem;
+      min-height: 27rem;            /* result appears without moving the sphere */
+      align-content: start;
+      text-align: center;
+    }
+
+    form {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.5rem;
+      width: min(100%, 26rem);
+    }
+    #show-group { grid-column: 1 / -1; }
+    input {
+      min-width: 0;
+      padding: 0.75rem 0.9rem;
+      font: inherit;
+      font-size: 1.0625rem;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+      background: var(--field);
+      border: 1.5px solid var(--ink);
+      border-radius: 6px;
+    }
+    input::placeholder { color: var(--muted); }
+    button {
+      padding: 0.75rem 1.2rem;
+      font: inherit;
+      font-weight: 700;
+      color: #fff;
+      background: var(--violet);
+      border: 1.5px solid var(--violet);
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover:not(:disabled) { background: #4f24bd; border-color: #4f24bd; }
+    button:disabled { opacity: 0.55; cursor: progress; }
+    button.secondary {
+      color: var(--violet);
+      background: var(--field);
+    }
+    button.secondary:hover:not(:disabled) { color: #fff; }
+    button.secondary:disabled {
+      color: var(--muted);
+      border-color: var(--line);
+      opacity: 1;
+      cursor: not-allowed;
+    }
+    input:focus-visible, button:focus-visible {
+      outline: 3px solid var(--blue);
+      outline-offset: 3px;
+    }
+
+    #status {
+      margin: 0;
+      min-height: 1.45em;
+      color: var(--muted);
+    }
+    #status[data-tone="error"] { color: var(--magenta); font-weight: 600; }
+
+    #result { margin: 0.25rem 0 0; }
+    #result p { margin: 0; }
+    #result-lead { color: var(--muted); }
+    #result-code {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6em;
+      margin-top: 0.2rem !important;
+      font-size: clamp(1.45rem, 4.6vw, 2.6rem);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.15;
+    }
+    #result-code::before {                 /* the red tile, as a mark */
+      content: '';
+      width: 0.62em;
+      height: 0.54em;
+      background: var(--blue);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      flex: none;
+    }
+
+    #remaining {
+      margin: 0;
+      font-size: 0.875rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    #group-info {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.35rem 1.25rem;
+      margin: 0;
+      font-size: 0.9375rem;
+    }
+    #group-info[hidden] { display: none; }
+    #group-summary { flex-basis: 100%; font-weight: 600; }
+    .key { display: inline-flex; align-items: center; gap: 0.4em; color: var(--muted); }
+    .key::before {
+      content: '';
+      width: 0.8em;
+      height: 0.7em;
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    }
+    .key-own::before { background: var(--blue); }
+    .key-taken::before { background: var(--magenta); }
+
+    footer {
+      margin: 0.5rem 0 0;
+      max-width: 44rem;
+      font-size: 0.8125rem;
+      color: var(--muted);
+      text-wrap: balance;
+    }
+    #demo-note {
+      margin: 0;
+      padding: 0.6rem 1rem;
+      font-size: 0.875rem;
+      color: var(--ink);
+      background: var(--field);
+      border-top: 1px solid var(--line);
+      text-align: center;
+    }
+
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
+
+    .shake { animation: shake 0.38s ease-in-out; }
+    @keyframes shake {
+      20%, 60% { transform: translateX(-7px); }
+      40%, 80% { transform: translateX(7px); }
+    }
+
+    @media (max-width: 30rem) {
+      header { padding: 1.25rem 1.1rem 0; }
+      h1 { font-size: 1.3rem; }
+      form { grid-template-columns: 1fr; }
+      #result-code { font-size: 1.35rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .shake { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="title">Kollektive Kugel: Erspiele dein Paneel!</h1>
+    <p id="subtitle"></p>
+  </header>
+
+  <div id="stage" aria-hidden="true"></div>
+
+  <section class="draw" aria-label="Paneel auswürfeln">
+    <form id="draw-form" autocomplete="off" novalidate>
+      <label for="student-id" class="sr-only">Matrikelnummer</label>
+      <input id="student-id" name="student-id" placeholder="Matrikelnummer" spellcheck="false" autocapitalize="off">
+      <button id="roll" type="submit">Roll the Dice!</button>
+      <button id="show-group" class="secondary" type="button" aria-pressed="false" disabled>Gruppe anzeigen</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+    <div id="result" aria-live="polite" hidden>
+      <p id="result-lead"></p>
+      <p id="result-code"></p>
+    </div>
+    <p id="group-info" aria-live="polite" hidden>
+      <span id="group-summary"></span>
+      <span class="key key-own">Dein Paneel</span>
+      <span class="key key-taken">Bereits vergeben</span>
+    </p>
+    <p id="remaining"></p>
+    <footer id="footer"></footer>
+  </section>
+
+  <p id="demo-note" hidden>Demo-Modus: noch keine Datenbank verbunden. Teste mit 1234567 oder 7654321, es wird nichts gespeichert.</p>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
