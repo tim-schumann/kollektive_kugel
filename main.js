@@ -17,6 +17,8 @@ const COLORS = {
   groupType2: 0xcdc6f0,
   outside:    0xf6f5fa,
 };
+// Edge lengths of the built sphere (Ø 1200 mm), shortest to longest.
+const EDGE_LENGTHS_MM = { A: 209, B: 242, C: 247 };
 const TILE_GAP = 0.955;          // panels shrink towards their centre, leaving joints
 const TILT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.32);
 
@@ -26,7 +28,6 @@ const MOTION = reduceMotion
   : { idle: 0.22, max: 24, up: 1.7,  down: 3.6, turn: 1.1 };
 
 const demoMode = !SUPABASE_URL || !SUPABASE_KEY;
-const showLabels = new URLSearchParams(location.search).has('labels');
 
 // ---------------------------------------------------------------------------
 // DOM
@@ -45,6 +46,8 @@ const resultCode = $('result-code');
 const groupInfo = $('group-info');
 const groupSummary = $('group-summary');
 const remainingEl = $('remaining');
+const labelsToggle = $('toggle-labels');
+const edgesToggle = $('toggle-edges');
 
 $('title').textContent = PAGE_TITLE;
 $('subtitle').textContent = PAGE_SUBTITLE;
@@ -107,25 +110,6 @@ for (let g = 1; g <= 20; g++) {
   groups.set(g, { normal, up });
 }
 
-if (showLabels) addLabels();
-
-function addLabels() {
-  for (const t of tiles) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 128; canvas.height = 64;
-    const ctx = canvas.getContext('2d');
-    ctx.font = '600 40px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#1f1b3a';
-    ctx.fillText(`${t.icoFace}-${t.subFace}`, 64, 34);
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true }));
-    sprite.position.copy(t.centroid).addScaledVector(t.normal, 0.02);
-    sprite.scale.set(0.16, 0.08, 1);
-    sphere.add(sprite);
-  }
-}
-
 // Camera distance for the whole sphere, and for a close-up of one group.
 const view = { own: -1, group: null, groupTaken: new Set(), zoom: 0, zoomTarget: 0, far: 5, near: 3.5 };
 
@@ -169,7 +153,143 @@ function repaint() {
     for (let k = 0; k < 3; k++) color.toArray(colors, i * 9 + k * 3);
   });
   geometry.attributes.color.needsUpdate = true;
+  updateLabelColors();
 }
+
+// ---------------------------------------------------------------------------
+// Overlays: panel labels and edge lengths, lying flat on the surface
+// ---------------------------------------------------------------------------
+
+const FONT = "'Titillium Web', 'Segoe UI', system-ui, sans-serif";
+const overlays = { labels: null, edges: null };
+
+// Place a plane flat on the surface: facing `normal`, its top towards `up`.
+function placeFlat(mesh, position, normal, up) {
+  const right = new THREE.Vector3().crossVectors(up, normal).normalize();
+  const top = new THREE.Vector3().crossVectors(normal, right);
+  mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, top, normal));
+  mesh.position.copy(position);
+}
+
+function canvasTexture(w, h, draw) {
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  draw(canvas.getContext('2d'), w, h);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return texture;
+}
+
+// Incircle of a panel: where the label has the most room.
+function incircle([A, B, C]) {
+  const a = B.distanceTo(C), b = C.distanceTo(A), c = A.distanceTo(B);
+  const center = new THREE.Vector3()
+    .addScaledVector(A, a).addScaledVector(B, b).addScaledVector(C, c)
+    .divideScalar(a + b + c);
+  const s = (a + b + c) / 2;
+  const area = Math.sqrt(s * (s - a) * (s - b) * (s - c));
+  return { center, radius: area / s };
+}
+
+function buildPanelLabels() {
+  const group = new THREE.Group();
+  const plane = new THREE.PlaneGeometry(1, 1);
+  group.userData.meshes = tiles.map((t) => {
+    const map = canvasTexture(128, 128, (ctx, w, h) => {
+      ctx.fillStyle = '#fff';                            // tinted per panel via material colour
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `700 38px ${FONT}`;
+      [`T${t.type}`, `G${t.icoFace}`, `F${t.subFace}`]
+        .forEach((line, k) => ctx.fillText(line, w / 2, h / 2 + (k - 1) * 38));
+    });
+    const mesh = new THREE.Mesh(plane, new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false }));
+    const { center, radius } = incircle(t.vertices);
+    const size = radius * 1.5;
+    mesh.scale.set(size, size, 1);
+    placeFlat(mesh, center.addScaledVector(t.normal, 0.004), t.normal, t.up);
+    group.add(mesh);
+    return mesh;
+  });
+  return group;
+}
+
+function buildEdgeLabels() {
+  const group = new THREE.Group();
+  const plane = new THREE.PlaneGeometry(0.105, 0.045);
+  const materials = {};
+  for (const [key, mm] of Object.entries(EDGE_LENGTHS_MM)) {
+    const map = canvasTexture(160, 70, (ctx, w, h) => {
+      ctx.fillStyle = '#f9f8fd';
+      ctx.strokeStyle = '#6132d2';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.roundRect(3, 3, w - 6, h - 6, (h - 6) / 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#1f1b3a';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `700 44px ${FONT}`;
+      ctx.fillText(String(mm), w / 2, h / 2 + 2);
+    });
+    materials[key] = new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false });
+  }
+
+  const seen = new Set();
+  const key = (v) => v.toArray().map((x) => x.toFixed(4)).join(',');
+  for (const t of tiles) {
+    for (let k = 0; k < 3; k++) {
+      const a = t.vertices[k], b = t.vertices[(k + 1) % 3];
+      const id = [key(a), key(b)].sort().join('|');
+      if (seen.has(id)) continue;
+      seen.add(id);
+
+      // Three lengths on a unit sphere: 0.3486, 0.4035, 0.4124
+      const length = a.distanceTo(b);
+      const type = length < 0.376 ? 'A' : length < 0.408 ? 'B' : 'C';
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      const normal = mid.clone().normalize();
+      let along = b.clone().sub(a).normalize();
+      let up = new THREE.Vector3().crossVectors(normal, along);
+      if (up.y < 0) { along.negate(); up.negate(); }     // keep text upright on an upright sphere
+      const mesh = new THREE.Mesh(plane, materials[type]);
+      placeFlat(mesh, mid.addScaledVector(normal, 0.006), normal, up);
+      group.add(mesh);
+    }
+  }
+  return group;
+}
+
+function updateLabelColors() {
+  const meshes = overlays.labels?.userData.meshes;
+  if (!meshes) return;
+  tiles.forEach((t, i) => {
+    const fill = panelColor(t, i);
+    const material = meshes[i].material;
+    material.color.setHex(fill === COLORS.own || fill === COLORS.taken ? 0xffffff : 0x1f1b3a);
+    material.opacity = fill === COLORS.outside ? 0.3 : 1;
+  });
+}
+
+async function setOverlay(name, on, button) {
+  if (on && !overlays[name]) {
+    await document.fonts.load(`700 40px ${FONT}`).catch(() => {});
+    overlays[name] = name === 'labels' ? buildPanelLabels() : buildEdgeLabels();
+    sphere.add(overlays[name]);
+    updateLabelColors();
+  }
+  if (overlays[name]) overlays[name].visible = on;
+  button.setAttribute('aria-pressed', String(on));
+}
+
+labelsToggle.addEventListener('click', () =>
+  setOverlay('labels', labelsToggle.getAttribute('aria-pressed') !== 'true', labelsToggle));
+edgesToggle.addEventListener('click', () =>
+  setOverlay('edges', edgesToggle.getAttribute('aria-pressed') !== 'true', edgesToggle));
+
 repaint();
 
 function markOwn(i) {
