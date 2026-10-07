@@ -14,12 +14,12 @@
 //            2 3 4
 //          5 6 7 8 9
 //
-// Sub-faces 1, 5 and 9 touch an icosahedron vertex  -> Type 1 (60 tiles)
-// All other sub-faces                                -> Type 2 (120 tiles)
+// Sub-faces 1, 5 and 9 touch an icosahedron vertex  -> Type 2 (60 small tiles)
+// All other sub-faces                                -> Type 1 (120 large tiles)
 // Code format: "Typ 1 - Gruppe 13 - Feld 7"  (type - icosahedron face - sub-face)
 //
-// To change the convention, only this file (and the SQL seed, if the type
-// rule changes) needs editing.
+// The numbering and the type rule are mirrored in supabase/setup.sql;
+// change both together.
 
 import * as THREE from 'three';
 
@@ -88,7 +88,7 @@ export function buildTiles() {
 
     tris.forEach((tri, ti) => {
       const subFace = ti + 1;
-      const type = CORNER_SUBFACES.has(subFace) ? 1 : 2;
+      const type = CORNER_SUBFACES.has(subFace) ? 2 : 1;
       const centroid = new THREE.Vector3().add(tri[0]).add(tri[1]).add(tri[2]).divideScalar(3);
       let normal = new THREE.Vector3()
         .subVectors(tri[1], tri[0])

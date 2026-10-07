@@ -16,9 +16,14 @@ create table if not exists public.tiles (
   assigned_at timestamptz
 );
 
--- 2. The 180 tiles (sub-faces 1, 5, 9 touch an icosahedron vertex = Typ 1) -------
+-- 2. The 180 tiles (sub-faces 1, 5, 9 touch an icosahedron vertex = Typ 2,
+--    all others = Typ 1). Mirrors geodesic.js; change both together. ---------
 
--- Brings codes from an earlier run into the current format; assignments are kept.
+-- Brings types and codes from an earlier run up to date; assignments are kept.
+update public.tiles
+set tile_type = case when sub_face in (1, 5, 9) then 2 else 1 end
+where tile_type <> case when sub_face in (1, 5, 9) then 2 else 1 end;
+
 update public.tiles
 set code = format('Typ %s - Gruppe %s - Feld %s', tile_type, ico_face, sub_face)
 where code <> format('Typ %s - Gruppe %s - Feld %s', tile_type, ico_face, sub_face);
@@ -27,11 +32,11 @@ insert into public.tiles (code, tile_type, ico_face, sub_face)
 select format('Typ %s - Gruppe %s - Feld %s', t.tile_type, f, s), t.tile_type, f, s
 from generate_series(1, 20) as f,
      generate_series(1, 9)  as s,
-     lateral (select case when s in (1, 5, 9) then 1 else 2 end as tile_type) as t
+     lateral (select case when s in (1, 5, 9) then 2 else 1 end as tile_type) as t
 on conflict (code) do nothing;
 
 -- 3. Lock the tables: with RLS on and no policies, the public API can't read
---    or write them. The website only talks to the two functions below.
+--    or write them. The website only talks to the three functions below.
 
 alter table public.students enable row level security;
 alter table public.tiles    enable row level security;

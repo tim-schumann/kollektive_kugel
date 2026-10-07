@@ -7,19 +7,22 @@ import { SUPABASE_URL, SUPABASE_KEY, PAGE_TITLE, PAGE_SUBTITLE, PAGE_FOOTER } fr
 // ---------------------------------------------------------------------------
 
 const COLORS = {
-  type1: 0xbab3e3,   // light violet: panels around the 12 five-fold vertices
-  type2: 0xe4e1f3,   // pale lavender
+  small: 0xbab3e3,   // light violet: Typ 2, the small panels around the 12 five-fold vertices
+  large: 0xe4e1f3,   // pale lavender: Typ 1
   own:   0x2c17e6,   // your panel (signal blue)
   taken: 0x9540b8,   // already assigned panels in your group (signal magenta)
   core:  0x1e1650,   // deep indigo, visible through the joints
+  coreFilling: 0xffffff,   // white between the fillings
   // group view: the group's free panels get a stronger tint, everything else fades
-  groupType1: 0xa89ee2,
-  groupType2: 0xcdc6f0,
+  groupSmall: 0xa89ee2,
+  groupLarge: 0xcdc6f0,
   outside:    0xf6f5fa,
 };
-// Edge lengths of the built sphere (Ø 1200 mm), shortest to longest.
-const EDGE_LENGTHS_MM = { A: 209, B: 242, C: 247 };
-const TILE_GAP = 0.955;          // panels shrink towards their centre, leaving joints
+// Built sphere: Ø 1200 mm. Edge labels are node-to-node lengths at this radius
+// (209 / 242 / 247 mm); the filling sits FILLING_INSET_MM inside every edge.
+const SPHERE_RADIUS_MM = 600;
+const FILLING_INSET_MM = 15;
+const TILE_GAP = 0.955;          // frames shrink towards their centre, leaving joints
 const TILT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.32);
 
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -48,6 +51,8 @@ const groupSummary = $('group-summary');
 const remainingEl = $('remaining');
 const labelsToggle = $('toggle-labels');
 const edgesToggle = $('toggle-edges');
+const frameButton = $('show-frame');
+const fillingButton = $('show-filling');
 
 $('title').textContent = PAGE_TITLE;
 $('subtitle').textContent = PAGE_SUBTITLE;
@@ -78,25 +83,36 @@ const tiles = buildTiles();
 const tileByCode = new Map(tiles.map((t, i) => [t.code, i]));
 const tileIndex = (icoFace, subFace) => tiles.findIndex((t) => t.icoFace === icoFace && t.subFace === subFace);
 
+// Two outlines per panel: the frame (the whole panel, shrunk slightly so the
+// joints show) and the filling (every edge moved inwards by FILLING_INSET_MM).
+const shapes = {
+  frame: tiles.map((t) => t.vertices.map((v) => v.clone().sub(t.centroid).multiplyScalar(TILE_GAP).add(t.centroid))),
+  filling: tiles.map((t) => insetTriangle(t.vertices, FILLING_INSET_MM / SPHERE_RADIUS_MM)),
+};
+const display = { mode: 'frame' };
+
 const positions = new Float32Array(tiles.length * 9);
 const colors = new Float32Array(tiles.length * 9);
-
-tiles.forEach((t, i) => {
-  const verts = t.vertices.map((v) => v.clone().sub(t.centroid).multiplyScalar(TILE_GAP).add(t.centroid));
-  verts.forEach((v, k) => v.toArray(positions, i * 9 + k * 3));
-});
 
 const geometry = new THREE.BufferGeometry();
 geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-geometry.computeVertexNormals();
+
+const coreMaterial = new THREE.MeshStandardMaterial({ color: COLORS.core, roughness: 1 });
+
+function setShape(mode) {
+  display.mode = mode;
+  coreMaterial.color.setHex(mode === 'filling' ? COLORS.coreFilling : COLORS.core);
+  shapes[mode].forEach((verts, i) => verts.forEach((v, k) => v.toArray(positions, i * 9 + k * 3)));
+  geometry.attributes.position.needsUpdate = true;
+  geometry.computeVertexNormals();
+}
+setShape('frame');
+
 sphere.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
   vertexColors: true, flatShading: true, roughness: 0.78, metalness: 0,
 })));
-sphere.add(new THREE.Mesh(
-  new THREE.SphereGeometry(0.94, 48, 32),
-  new THREE.MeshStandardMaterial({ color: COLORS.core, roughness: 1 }),
-));
+sphere.add(new THREE.Mesh(new THREE.SphereGeometry(0.94, 48, 32), coreMaterial));
 
 // Centre and "up" of each group (icosahedron face), for the group view.
 const groups = new Map();
@@ -140,11 +156,12 @@ new ResizeObserver(resize).observe(stage);
 const color = new THREE.Color();
 
 function panelColor(t, i) {
+  const small = t.type === 2;
   if (i === view.own) return COLORS.own;
-  if (view.group === null) return t.type === 1 ? COLORS.type1 : COLORS.type2;
+  if (view.group === null) return small ? COLORS.small : COLORS.large;
   if (t.icoFace !== view.group) return COLORS.outside;
   if (view.groupTaken.has(t.subFace)) return COLORS.taken;
-  return t.type === 1 ? COLORS.groupType1 : COLORS.groupType2;
+  return small ? COLORS.groupSmall : COLORS.groupLarge;
 }
 
 function repaint() {
@@ -161,7 +178,8 @@ function repaint() {
 // ---------------------------------------------------------------------------
 
 const FONT = "'Titillium Web', 'Segoe UI', system-ui, sans-serif";
-const overlays = { labels: null, edges: null };
+const overlayOn = { labels: false, edges: false };
+const overlayCache = new Map();          // 'labels:frame' → THREE.Group, built on first use
 
 // Place a plane flat on the surface: facing `normal`, its top towards `up`.
 function placeFlat(mesh, position, normal, up) {
@@ -193,10 +211,17 @@ function incircle([A, B, C]) {
   return { center, radius: area / s };
 }
 
-function buildPanelLabels() {
+// The panel with every edge moved inwards by `d`: scaled about its incentre.
+function insetTriangle(verts, d) {
+  const { center, radius } = incircle(verts);
+  const s = (radius - d) / radius;
+  return verts.map((v) => v.clone().sub(center).multiplyScalar(s).add(center));
+}
+
+function buildPanelLabels(mode) {
   const group = new THREE.Group();
   const plane = new THREE.PlaneGeometry(1, 1);
-  group.userData.meshes = tiles.map((t) => {
+  group.userData.meshes = tiles.map((t, i) => {
     const map = canvasTexture(128, 128, (ctx, w, h) => {
       ctx.fillStyle = '#fff';                            // tinted per panel via material colour
       ctx.textAlign = 'center';
@@ -206,7 +231,7 @@ function buildPanelLabels() {
         .forEach((line, k) => ctx.fillText(line, w / 2, h / 2 + (k - 1) * 38));
     });
     const mesh = new THREE.Mesh(plane, new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false }));
-    const { center, radius } = incircle(t.vertices);
+    const { center, radius } = incircle(mode === 'filling' ? shapes.filling[i] : t.vertices);
     const size = radius * 1.5;
     mesh.scale.set(size, size, 1);
     placeFlat(mesh, center.addScaledVector(t.normal, 0.004), t.normal, t.up);
@@ -216,11 +241,10 @@ function buildPanelLabels() {
   return group;
 }
 
-function buildEdgeLabels() {
-  const group = new THREE.Group();
-  const plane = new THREE.PlaneGeometry(0.105, 0.045);
-  const materials = {};
-  for (const [key, mm] of Object.entries(EDGE_LENGTHS_MM)) {
+const edgeMaterials = new Map();          // mm → material, shared by both modes
+
+function edgeMaterial(mm) {
+  if (!edgeMaterials.has(mm)) {
     const map = canvasTexture(160, 70, (ctx, w, h) => {
       ctx.fillStyle = '#f9f8fd';
       ctx.strokeStyle = '#6132d2';
@@ -235,60 +259,91 @@ function buildEdgeLabels() {
       ctx.font = `700 44px ${FONT}`;
       ctx.fillText(String(mm), w / 2, h / 2 + 2);
     });
-    materials[key] = new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false });
+    edgeMaterials.set(mm, new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false }));
   }
+  return edgeMaterials.get(mm);
+}
 
+// Frame: one label per edge, shared by two panels (209 / 242 / 247 mm).
+// Filling: one label per edge of every filling, as it gets cut.
+function buildEdgeLabels(mode) {
+  const group = new THREE.Group();
+  const plane = new THREE.PlaneGeometry(0.105, 0.045);
   const seen = new Set();
   const key = (v) => v.toArray().map((x) => x.toFixed(4)).join(',');
-  for (const t of tiles) {
+  tiles.forEach((t, i) => {
+    const verts = mode === 'filling' ? shapes.filling[i] : t.vertices;
     for (let k = 0; k < 3; k++) {
-      const a = t.vertices[k], b = t.vertices[(k + 1) % 3];
-      const id = [key(a), key(b)].sort().join('|');
-      if (seen.has(id)) continue;
-      seen.add(id);
-
-      // Three lengths on a unit sphere: 0.3486, 0.4035, 0.4124
-      const length = a.distanceTo(b);
-      const type = length < 0.376 ? 'A' : length < 0.408 ? 'B' : 'C';
+      const a = verts[k], b = verts[(k + 1) % 3];
+      if (mode === 'frame') {
+        const id = [key(a), key(b)].sort().join('|');
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      const mm = Math.round(a.distanceTo(b) * SPHERE_RADIUS_MM);
       const mid = a.clone().add(b).multiplyScalar(0.5);
-      const normal = mid.clone().normalize();
-      let along = b.clone().sub(a).normalize();
-      let up = new THREE.Vector3().crossVectors(normal, along);
-      if (up.y < 0) { along.negate(); up.negate(); }     // keep text upright on an upright sphere
-      const mesh = new THREE.Mesh(plane, materials[type]);
+      const normal = mode === 'filling' ? t.normal : mid.clone().normalize();
+      const along = b.clone().sub(a).normalize();
+      const up = new THREE.Vector3().crossVectors(normal, along);
+      if (up.y < 0) up.negate();                        // keep text upright on an upright sphere
+      const mesh = new THREE.Mesh(plane, edgeMaterial(mm));
       placeFlat(mesh, mid.addScaledVector(normal, 0.006), normal, up);
       group.add(mesh);
     }
-  }
+  });
   return group;
 }
 
 function updateLabelColors() {
-  const meshes = overlays.labels?.userData.meshes;
-  if (!meshes) return;
-  tiles.forEach((t, i) => {
-    const fill = panelColor(t, i);
-    const material = meshes[i].material;
-    material.color.setHex(fill === COLORS.own || fill === COLORS.taken ? 0xffffff : 0x1f1b3a);
-    material.opacity = fill === COLORS.outside ? 0.3 : 1;
-  });
-}
-
-async function setOverlay(name, on, button) {
-  if (on && !overlays[name]) {
-    await document.fonts.load(`700 40px ${FONT}`).catch(() => {});
-    overlays[name] = name === 'labels' ? buildPanelLabels() : buildEdgeLabels();
-    sphere.add(overlays[name]);
-    updateLabelColors();
+  for (const [id, group] of overlayCache) {
+    if (!id.startsWith('labels:')) continue;
+    tiles.forEach((t, i) => {
+      const fill = panelColor(t, i);
+      const material = group.userData.meshes[i].material;
+      material.color.setHex(fill === COLORS.own || fill === COLORS.taken ? 0xffffff : 0x1f1b3a);
+      material.opacity = fill === COLORS.outside ? 0.3 : 1;
+    });
   }
-  if (overlays[name]) overlays[name].visible = on;
-  button.setAttribute('aria-pressed', String(on));
 }
 
-labelsToggle.addEventListener('click', () =>
-  setOverlay('labels', labelsToggle.getAttribute('aria-pressed') !== 'true', labelsToggle));
-edgesToggle.addEventListener('click', () =>
-  setOverlay('edges', edgesToggle.getAttribute('aria-pressed') !== 'true', edgesToggle));
+// Show the overlays that are switched on, in the current mode (frame or filling).
+async function refreshOverlays() {
+  const names = Object.keys(overlayOn);
+  if (names.some((name) => overlayOn[name] && !overlayCache.has(`${name}:${display.mode}`))) {
+    await document.fonts.load(`700 40px ${FONT}`).catch(() => {});
+  }
+  for (const name of names) {
+    const id = `${name}:${display.mode}`;
+    if (overlayOn[name] && !overlayCache.has(id)) {
+      const group = name === 'labels' ? buildPanelLabels(display.mode) : buildEdgeLabels(display.mode);
+      overlayCache.set(id, group);
+      sphere.add(group);
+    }
+  }
+  for (const [id, group] of overlayCache) {
+    const [name, mode] = id.split(':');
+    group.visible = overlayOn[name] && mode === display.mode;
+  }
+  updateLabelColors();
+}
+
+function toggleOverlay(name, button) {
+  overlayOn[name] = !overlayOn[name];
+  button.setAttribute('aria-pressed', String(overlayOn[name]));
+  refreshOverlays();
+}
+
+function showShape(mode) {
+  setShape(mode);
+  frameButton.setAttribute('aria-pressed', String(mode === 'frame'));
+  fillingButton.setAttribute('aria-pressed', String(mode === 'filling'));
+  refreshOverlays();
+}
+
+labelsToggle.addEventListener('click', () => toggleOverlay('labels', labelsToggle));
+edgesToggle.addEventListener('click', () => toggleOverlay('edges', edgesToggle));
+frameButton.addEventListener('click', () => showShape('frame'));
+fillingButton.addEventListener('click', () => showShape('filling'));
 
 repaint();
 
@@ -511,6 +566,7 @@ function resetView() {
   view.own = -1;
   view.group = null;
   view.zoomTarget = 0;
+  if (anim.mode === 'done') anim.mode = 'idle';
   repaint();
   groupButton.textContent = GROUP_SHOW;
   groupButton.disabled = true;
@@ -556,6 +612,11 @@ form.addEventListener('submit', async (e) => {
     await spinDownTo(tiles[index], reduceMotion ? 2 : 5, reduceMotion ? 0.8 : 1.6, 0.8);
     markOwn(index);
     showResult('Paneel bereits vergeben. Deine Paneelnummer ist:', result.code);
+  } else if ((result.status === 'assigned' || result.status === 'existing') && result.code) {
+    // Saved on the server, but not found on this sphere: numbering out of sync with setup.sql.
+    console.warn('Panel not found on the sphere:', result);
+    showStatus('Dein Paneel ist gespeichert, kann aber nicht auf der Kugel angezeigt werden.', 'error');
+    showResult(result.status === 'existing' ? 'Paneel bereits vergeben. Deine Paneelnummer ist:' : 'Deine Paneelnummer ist:', result.code);
   } else if (result.status === 'invalid') {
     showStatus('Falsche Matrikelnummer', 'error');
     shake();
@@ -610,10 +671,7 @@ groupButton.addEventListener('click', async () => {
 // A new person at the same screen: back to the idle spin when the ID changes.
 input.addEventListener('input', () => {
   if (statusEl.dataset.tone === 'error') showStatus('');
-  if (anim.mode === 'done' && !busy) {
-    resetView();
-    anim.mode = 'idle';
-  }
+  if (anim.mode === 'done' && !busy) resetView();
 });
 
 refreshRemaining();

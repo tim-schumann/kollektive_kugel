@@ -34,7 +34,7 @@
       padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
       background: var(--paper);
       color: var(--ink);
-      font-family: 'Titillium Web', 'Segoe UI', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      font-family: 'Titillium Web', 'Segoe UI', system-ui, -apple-system, sans-serif;
       font-size: 1rem;
       line-height: 1.45;
     }
@@ -92,6 +92,11 @@
     }
     .toggle[aria-pressed="true"]::before { background: #fff; border-color: #fff; }
     .toggle[aria-pressed="true"]:hover { background: #4f24bd; border-color: #4f24bd; }
+
+    .segmented { display: inline-flex; }     /* Rahmen | Füllung: one of the two is on */
+    .segmented .toggle:first-child { border-radius: 999px 0 0 999px; }
+    .segmented .toggle:last-child { border-radius: 0 999px 999px 0; margin-left: -1.5px; }
+    .segmented .toggle[aria-pressed="true"] { position: relative; z-index: 1; }
 
     #stage {
       position: relative;
@@ -186,7 +191,7 @@
       font-variant-numeric: tabular-nums;
       line-height: 1.15;
     }
-    #result-code::before {                 /* the red tile, as a mark */
+    #result-code::before {                 /* your panel (blue), as a mark */
       content: '';
       width: 0.62em;
       height: 0.54em;
@@ -269,6 +274,10 @@
   <div class="toggles" role="group" aria-label="Anzeige auf der Kugel">
     <button id="toggle-labels" class="toggle" type="button" aria-pressed="false">Beschriftung</button>
     <button id="toggle-edges" class="toggle" type="button" aria-pressed="false">Kantenlängen (mm)</button>
+    <div class="segmented" role="group" aria-label="Paneelansicht">
+      <button id="show-frame" class="toggle" type="button" aria-pressed="true">Rahmen</button>
+      <button id="show-filling" class="toggle" type="button" aria-pressed="false">Füllung</button>
+    </div>
   </div>
 
   <div id="stage" aria-hidden="true"></div>

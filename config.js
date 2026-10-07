@@ -1,5 +1,5 @@
 // Fill these in from Supabase: "Connect" button or Project Settings.
-// Both values are safe to publish: the key only allows calling the two
+// Both values are safe to publish: the key only allows calling the three
 // database functions, the tables themselves are locked.
 //
 // Leave them empty to run in demo mode (no database, test IDs 1234567 / 7654321).
