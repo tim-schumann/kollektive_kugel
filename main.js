@@ -425,6 +425,13 @@ function updateMotion(dt) {
       : Math.max(view.zoom - step, view.zoomTarget);
     updateCamera();
   }
+
+  if (userZoom.value !== userZoom.target) {
+    const k = reduceMotion ? 1 : 1 - Math.exp(-dt * 10);
+    let z = userZoom.value + (userZoom.target - userZoom.value) * k;
+    if (Math.abs(userZoom.target - z) < 0.001) z = userZoom.target;
+    applyZoom(z);
+  }
 }
 
 function finish() {
@@ -433,29 +440,70 @@ function finish() {
   r?.();
 }
 
-// Drag to turn the sphere while it isn't rolling.
-let drag = null;
+// User zoom: narrows the camera's view, so the camera never moves into the sphere.
+// Pinch with two fingers; double-click zooms in step by step, then back out.
+const ZOOM = { min: 1, max: 4, step: 1.6 };
+const userZoom = { value: 1, target: 1 };
+
+function applyZoom(z) {
+  userZoom.value = z;
+  camera.zoom = z;
+  camera.updateProjectionMatrix();
+}
+
+function zoomTo(z, immediate = false) {
+  userZoom.target = THREE.MathUtils.clamp(z, ZOOM.min, ZOOM.max);
+  if (immediate) applyZoom(userZoom.target);
+}
+
+renderer.domElement.addEventListener('dblclick', (e) => {
+  e.preventDefault();
+  zoomTo(userZoom.target >= ZOOM.max - 0.01 ? ZOOM.min : userZoom.target * ZOOM.step);
+});
+
+// One pointer turns the sphere while it isn't rolling; two pointers zoom.
+const pointers = new Map();               // pointerId → last { x, y }
+let pinch = null;                         // finger distance at the last move
 const canDrag = () => anim.mode === 'idle' || anim.mode === 'done';
+const fingerDistance = () => {
+  const [a, b] = pointers.values();
+  return Math.hypot(a.x - b.x, a.y - b.y);
+};
+
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (!canDrag()) return;
-  drag = { x: e.clientX, y: e.clientY };
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   renderer.domElement.setPointerCapture(e.pointerId);
+  if (pointers.size === 2) pinch = fingerDistance();
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
-  if (!drag || !canDrag()) return;
-  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-  drag = { x: e.clientX, y: e.clientY };
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX;
+  p.y = e.clientY;
+
+  if (pointers.size >= 2) {
+    const d = fingerDistance();
+    if (pinch) zoomTo(userZoom.target * (d / pinch), true);
+    pinch = d;
+    return;
+  }
+  if (!canDrag()) return;
+  const s = 0.008 / userZoom.value;       // slower when zoomed in
   const R = new THREE.Quaternion()
-    .setFromAxisAngle(Y, dx * 0.008)
-    .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * 0.008));
+    .setFromAxisAngle(Y, dx * s)
+    .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * s));
   const Ry = new THREE.Quaternion().setFromAxisAngle(Y, anim.theta);
   // B' = Ry⁻¹ · TILT⁻¹ · R · TILT · Ry · B
   anim.B.premultiply(Ry).premultiply(TILT).premultiply(R)
     .premultiply(TILT.clone().invert()).premultiply(Ry.clone().invert());
 });
-const endDrag = () => (drag = null);
-renderer.domElement.addEventListener('pointerup', endDrag);
-renderer.domElement.addEventListener('pointercancel', endDrag);
+const endPointer = (e) => {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+};
+renderer.domElement.addEventListener('pointerup', endPointer);
+renderer.domElement.addEventListener('pointercancel', endPointer);
 
 // ---------------------------------------------------------------------------
 // Render loop
@@ -566,6 +614,7 @@ function resetView() {
   view.own = -1;
   view.group = null;
   view.zoomTarget = 0;
+  zoomTo(ZOOM.min);
   if (anim.mode === 'done') anim.mode = 'idle';
   repaint();
   groupButton.textContent = GROUP_SHOW;
@@ -634,6 +683,7 @@ groupButton.addEventListener('click', async () => {
   if (busy || view.own < 0) return;
   const own = tiles[view.own];
   setBusy(true);
+  zoomTo(ZOOM.min);                       // the group view sets its own framing
 
   if (view.group === null) {
     let taken;
