@@ -13,6 +13,7 @@ const COLORS = {
   taken: 0x9540b8,   // already assigned panels in your group (signal magenta)
   core:  0x1e1650,   // deep indigo, visible through the joints
   coreFilling: 0xffffff,   // white between the fillings
+  frameLine:   0x8f86c8,   // panel edges in the filling view
   // group view: the group's free panels get a stronger tint, everything else fades
   groupSmall: 0xa89ee2,
   groupLarge: 0xcdc6f0,
@@ -61,6 +62,7 @@ const accountEl = $('account');
 const whoEl = $('who');
 const logoutButton = $('logout');
 const statusEl = $('status');
+const toastEl = $('toast');
 const resultEl = $('result');
 const resultLead = $('result-lead');
 const resultCode = $('result-code');
@@ -85,6 +87,7 @@ if (demoMode) $('demo-note').hidden = $('login-demo').hidden = false;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.domElement.setAttribute('aria-hidden', 'true');
 stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -119,8 +122,29 @@ geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
 const coreMaterial = new THREE.MeshStandardMaterial({ color: COLORS.core, roughness: 1 });
 
+// Thin lines along the panel edges, so the frames still read in the filling view.
+const frameLines = (() => {
+  const seen = new Set();
+  const key = (v) => v.toArray().map((x) => x.toFixed(4)).join(',');
+  const points = [];
+  for (const t of tiles) {
+    for (let k = 0; k < 3; k++) {
+      const a = t.vertices[k], b = t.vertices[(k + 1) % 3];
+      const id = [key(a), key(b)].sort().join('|');
+      if (seen.has(id)) continue;
+      seen.add(id);
+      points.push(a.clone().multiplyScalar(1.0015), b.clone().multiplyScalar(1.0015));
+    }
+  }
+  return new THREE.LineSegments(
+    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({ color: COLORS.frameLine }),
+  );
+})();
+
 function setShape(mode) {
   display.mode = mode;
+  frameLines.visible = mode === 'filling';
   coreMaterial.color.setHex(mode === 'filling' ? COLORS.coreFilling : COLORS.core);
   shapes[mode].forEach((verts, i) => verts.forEach((v, k) => v.toArray(positions, i * 9 + k * 3)));
   geometry.attributes.position.needsUpdate = true;
@@ -132,6 +156,7 @@ sphere.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
   vertexColors: true, flatShading: true, roughness: 0.78, metalness: 0,
 })));
 sphere.add(new THREE.Mesh(new THREE.SphereGeometry(0.94, 48, 32), coreMaterial));
+sphere.add(frameLines);
 
 // Centre and "up" of each group (icosahedron face), for the group view.
 const groups = new Map();
@@ -969,6 +994,22 @@ function showStatus(text, tone = '') {
   statusEl.dataset.tone = tone;
 }
 
+// Short notice over the sphere; takes no layout space. ms = 0 keeps it up.
+let toastTimer = 0;
+
+function showToast(text, tone = '', ms = 2000) {
+  clearTimeout(toastTimer);
+  toastEl.textContent = text;
+  toastEl.dataset.tone = tone;
+  toastEl.classList.add('show');
+  if (ms) toastTimer = setTimeout(hideToast, ms);
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  toastEl.classList.remove('show');
+}
+
 function showLoginStatus(text, tone = '') {
   loginStatus.textContent = text;
   loginStatus.dataset.tone = tone;
@@ -1034,7 +1075,7 @@ async function enter({ student_id, tile }) {
     return;
   }
   setBusy(true);
-  await showTile(tile, 'turn');
+  await showTile(tile, 'turn', 'Dir ist bereits ein Paneel zugewiesen. Deine Paneelnummer ist:');
   setBusy(false);
   loadDesigns({ ownOnly: true }).catch((err) => {
     if (!(err instanceof SessionExpired)) console.error(err);
@@ -1048,6 +1089,7 @@ function logout(message = '') {
   designs.on = false;
   panelsToggle.setAttribute('aria-pressed', 'false');
   clearDesigns();
+  hideToast();
   resetView();
   showStatus('');
   passwordInput.value = '';
@@ -1308,16 +1350,16 @@ panelsToggle.addEventListener('click', async () => {
   refreshDesigns();
   if (!designs.on || designs.loading) return;
   designs.loading = true;
-  showStatus('Paneele werden geladen …');
+  showToast('Paneele werden geladen …', '', 0);
   try {
     const n = await loadDesigns({
-      onProgress: (done, total) => showStatus(`Paneele werden geladen … ${done} von ${total}`),
+      onProgress: (done, total) => showToast(`Paneele werden geladen … ${done} von ${total}`, '', 0),
     });
-    showStatus(n ? `${n} ${n === 1 ? 'Design' : 'Designs'} geladen.` : 'Noch hat niemand ein Design hochgeladen.');
+    showToast(n ? `${n} ${n === 1 ? 'Design' : 'Designs'} geladen.` : 'Noch hat niemand ein Design hochgeladen.');
   } catch (err) {
-    if (err instanceof SessionExpired) return;
+    if (err instanceof SessionExpired) return hideToast();
     console.error(err);
-    showStatus(NO_CONNECTION, 'error');
+    showToast(NO_CONNECTION, 'error', 5000);
   } finally {
     designs.loading = false;
   }

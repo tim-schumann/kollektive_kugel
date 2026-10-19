@@ -113,6 +113,30 @@
     }
     #stage canvas:active { cursor: grabbing; }
 
+    /* Short notices over the sphere, e.g. after "Panels laden" */
+    #toast {
+      position: absolute;
+      left: 50%;
+      bottom: 1rem;
+      z-index: 1;
+      max-width: calc(100% - 2rem);
+      margin: 0;
+      padding: 0.45rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #fff;
+      background: rgba(31, 27, 58, 0.88);
+      border-radius: 999px;
+      box-shadow: 0 6px 20px rgba(31, 27, 58, 0.18);
+      text-align: center;
+      pointer-events: none;
+      opacity: 0;
+      transform: translate(-50%, 0.4rem);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+    #toast[data-tone="error"] { background: var(--magenta); }
+
     .draw {
       display: grid;
       justify-items: center;
@@ -368,7 +392,9 @@
     <button id="toggle-panels" class="toggle" type="button" aria-pressed="false">Panels laden</button>
   </div>
 
-  <div id="stage" aria-hidden="true" data-locked inert></div>
+  <div id="stage" data-locked inert>
+    <p id="toast" role="status" aria-live="polite"></p>
+  </div>
 
   <section class="draw" aria-label="Dein Paneel" data-locked inert>
     <p id="status" role="status" aria-live="polite"></p>
